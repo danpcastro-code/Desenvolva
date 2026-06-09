@@ -13,16 +13,26 @@ app.post('/gemini', async (req, res) => {
   }
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req.body),
-      }
-    );
+    const userMessage = req.body?.contents?.[0]?.parts?.[0]?.text || '';
+    
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'llama3-8b-8192',
+        messages: [{ role: 'user', content: userMessage }]
+      })
+    });
+
     const data = await response.json();
-    res.json(data);
+    const text = data.choices?.[0]?.message?.content || '';
+
+    res.json({
+      candidates: [{ content: { parts: [{ text }] } }]
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
