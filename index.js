@@ -3,8 +3,7 @@ const cors = require('cors');
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: 'https://desenvolva-2efaf.web.app' }));
-
+app.use(cors());
 app.post('/gemini', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   
