@@ -15,22 +15,20 @@ app.post('/gemini', async (req, res) => {
   try {
     const userMessage = req.body?.contents?.[0]?.parts?.[0]?.text || '';
     
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 1024,
+        model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: userMessage }]
       })
     });
 
     const data = await response.json();
-    const text = data.content?.[0]?.text || '';
+    const text = data.choices?.[0]?.message?.content || '';
 
     res.json({
       candidates: [{ content: { parts: [{ text }] } }]
