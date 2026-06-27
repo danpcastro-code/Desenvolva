@@ -2,19 +2,19 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 app.use(cors());
 
 app.post('/gemini', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
-  
+
   if (!apiKey) {
     return res.status(500).json({ error: 'API key não configurada' });
   }
 
   try {
     const userMessage = req.body?.contents?.[0]?.parts?.[0]?.text || '';
-    
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
