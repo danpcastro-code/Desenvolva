@@ -763,13 +763,31 @@ export const extractCompetenciesFromResume = async (
   resumeText: string,
   allCompetencies: Competency[]
 ): Promise<string[]> => {
+  const catalogList = allCompetencies
+    .map(c => `"${c.name}"${c.description ? ` — ${c.description.substring(0, 100)}` : ''}`)
+    .join('\n');
+
   const prompt = `
-    Analise o currículo abaixo e identifique quais competências do catálogo a pessoa demonstra.
-    Currículo: ${resumeText}
-    Catálogo: ${allCompetencies.map(c => c.name).join(', ')}
-    Retorne APENAS um JSON válido sem texto adicional:
-    {"competencyNames": ["nome1", "nome2"]}
-  `;
+Você é especialista em mapeamento de competências no serviço público brasileiro.
+
+TAREFA: Analise TODO o conteúdo do currículo abaixo (cargos exercidos, responsabilidades, atribuições, cursos, formações, áreas de interesse e soft skills) e identifique quais competências do CATÁLOGO a pessoa demonstra — por correspondência SEMÂNTICA, não literal.
+
+REGRAS:
+- O currículo pode usar nomes diferentes dos do catálogo. Ex: "FOCO NOS RESULTADOS PARA OS CIDADÃOS" pode corresponder a "Orientação a Resultados".
+- Considere o histórico completo, não apenas seções rotuladas como "competências".
+- Retorne APENAS nomes copiados EXATAMENTE do catálogo (sem alteração de grafia).
+- Inclua se houver evidência razoável no currículo; exclua apenas se claramente sem relação.
+
+CATÁLOGO DE COMPETÊNCIAS (use estes nomes exatos no retorno):
+${catalogList}
+
+CURRÍCULO:
+${resumeText}
+
+Retorne APENAS JSON válido, sem texto adicional:
+{"competencyNames": ["nome exato do catálogo 1", "nome exato do catálogo 2"]}
+`.trim();
+
   try {
     const text = await callGemini(prompt);
     const result = extractJSON(text);

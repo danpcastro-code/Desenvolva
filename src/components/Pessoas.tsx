@@ -262,26 +262,57 @@ const PessoaDetail: React.FC<{
         setIsExtracting(true);
         setError(null);
         try {
-            // Ordem correta: (text, allCompetencies). Retorna string[] — nomes do catálogo.
-            const resumeInput = pessoa.resumeText || '';
-            const extractedNames = await extractCompetenciesFromResume(resumeInput, allCompetencies);
+            let resumeInput = pessoa.resumeText || '';
 
-            if (extractedNames.length === 0) {
-                alert("Nenhuma competência clara foi identificada no currículo.");
+            // Extrai texto do PDF via pdf.js (importação dinâmica para não inflar o bundle)
+            if (pessoa.resumeFile?.mimeType === 'application/pdf') {
+                const { extractTextFromPdfBase64 } = await import('../utils/pdfExtractor');
+                const pdfText = await extractTextFromPdfBase64(pessoa.resumeFile.data);
+                if (pdfText.trim()) {
+                    console.log('[Currículo PDF] texto extraído (primeiros 500 chars):', pdfText.substring(0, 500));
+                    resumeInput = pdfText + (resumeInput ? '\n\n' + resumeInput : '');
+                } else {
+                    throw new Error('Não foi possível ler o texto do PDF. O arquivo pode estar em formato de imagem (escaneado). Tente colar o texto manualmente no campo de currículo.');
+                }
+            }
+
+            if (!resumeInput.trim()) {
+                alert("Nenhum texto disponível para análise. Cole o texto do currículo manualmente.");
                 return;
             }
 
-            // Converte nomes em IndividualCompetency com nível padrão 3 (intermediário).
-            // O currículo demonstra presença da competência, mas não avalia proficiência.
-            const newCompetencies: IndividualCompetency[] = extractedNames.map(name => {
-                const comp = allCompetencies.find(c => c.name === name);
-                return {
-                    competencyId: comp?.id || Math.random().toString(36).substr(2, 9),
-                    competencyName: name,
-                    competencyType: comp?.type || 'Técnica',
+            const extractedNames = await extractCompetenciesFromResume(resumeInput, allCompetencies);
+
+            if (extractedNames.length === 0) {
+                alert("Nenhuma competência foi identificada no currículo.");
+                return;
+            }
+
+            // Matching tolerante: normaliza acentos e case; fallback por substring
+            const norm = (s: string) =>
+                s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+            const newCompetencies: IndividualCompetency[] = extractedNames.flatMap(name => {
+                const n = norm(name);
+                const comp =
+                    allCompetencies.find(c => norm(c.name) === n) ??
+                    allCompetencies.find(c => norm(c.name).includes(n) || n.includes(norm(c.name)));
+                if (!comp) {
+                    console.warn(`[Extração] nome retornado pela IA não encontrado no catálogo: "${name}"`);
+                    return [];
+                }
+                return [{
+                    competencyId: comp.id,
+                    competencyName: comp.name,
+                    competencyType: comp.type,
                     proficiencyLevel: 3
-                };
+                }];
             });
+
+            if (newCompetencies.length === 0) {
+                alert("A IA identificou competências mas nenhuma casou com o catálogo. Verifique o console para detalhes.");
+                return;
+            }
 
             // Merge com existentes: substitui por nome, adiciona novas
             const merged = [...pessoa.individualCompetencies];
@@ -295,7 +326,7 @@ const PessoaDetail: React.FC<{
             });
 
             await onProfileUpdate({ ...pessoa, individualCompetencies: merged });
-            alert(`${extractedNames.length} competências extraídas e atualizadas no perfil.`);
+            alert(`${newCompetencies.length} competências extraídas e atualizadas no perfil.`);
         } catch (err) {
             setError((err as Error).message);
         } finally {
