@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Pessoa, Cargo, OrganizationalUnit, Competency, IndividualCompetency, PessoaAnalysis, SuggestedCompetency, CompetencyGap } from '../types';
+import { Pessoa, Cargo, OrganizationalUnit, Competency, IndividualCompetency, PessoaAnalysis } from '../types';
 import { getPessoas, addPessoa, updatePessoa, deletePessoa, getCargos, getUnits, getCompetencies } from '../services/firebaseService';
-import { analyzePessoaCompetencyGap, batchFindCompetencyMatches, extractCompetenciesFromResume } from '../services/geminiService';
+import { analyzePessoaCompetencyGap, extractCompetenciesFromResume } from '../services/geminiService';
+import { calcularGapAnalysis } from '../services/gapAnalysisService';
+import GapAnalysisResult from './GapAnalysisResult';
 import { PlusIcon, PencilIcon, TrashIcon, UserCircleIcon, BeakerIcon, CheckIcon, PrinterIcon, ArrowUpTrayIcon, DocumentTextIcon } from './Icons';
 
 const LoadingSpinner: React.FC<{text?: string}> = ({ text = "Aguarde..." }) => (
@@ -251,7 +253,27 @@ const PessoaDetail: React.FC<{
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isExtracting, setIsExtracting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [analysisTarget, setAnalysisTarget] = useState<'cargo' | 'unit'>('cargo');
+
+    // Cargo atual da pessoa (null quando pessoa não tem cargoId ou cargo não encontrado)
+    const cargoAtual = useMemo(
+        () => allCargos.find(c => c.id === pessoa.cargoId) ?? null,
+        [allCargos, pessoa.cargoId]
+    );
+
+    // Resultado estruturado do cálculo — preenchido ao clicar "Analisar com IA"
+    // ou restaurado automaticamente ao montar se já existe análise salva + cargo disponível
+    const [analysisResult, setAnalysisResult] = useState<ReturnType<typeof calcularGapAnalysis> | null>(null);
+
+    useEffect(() => {
+        if (pessoa.analysis && cargoAtual && !analysisResult) {
+            try {
+                setAnalysisResult(calcularGapAnalysis(pessoa, cargoAtual, allCompetencies));
+            } catch {
+                // Cargo sem perfil — analysisResult permanece null; UI mostra aviso
+            }
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cargoAtual]);
 
     const handleExtractCompetencies = async () => {
         if (!pessoa.resumeFile && !pessoa.resumeText) {
@@ -335,98 +357,36 @@ const PessoaDetail: React.FC<{
     };
 
     const handleAnalysis = async () => {
+        if (!cargoAtual) {
+            setError("Cargo atual não encontrado. Vincule o servidor a um cargo com perfil de competências.");
+            return;
+        }
+
         setIsAnalyzing(true);
         setError(null);
         try {
-            let targetCompetenciesWithLevels: (SuggestedCompetency & { competencyType: 'Técnica' | 'Gerencial' | 'Comportamental' })[] = [];
-            let targetId = '';
-            let targetName = '';
+            // 1. Cálculo local instantâneo — exibe cards/radar enquanto IA processa
+            const result = calcularGapAnalysis(pessoa, cargoAtual, allCompetencies);
+            setAnalysisResult(result);
 
-            if (analysisTarget === 'cargo') {
-                const cargo = allCargos.find(c => c.id === pessoa.cargoId);
-                if (!cargo || !cargo.analysis) {
-                    throw new Error("O cargo atual não possui uma análise de competências para comparação.");
-                }
-
-                const sourceCompetencies = cargo.analysis.simplifiedCompetencies || cargo.analysis.mapping.flatMap(m => m.suggested);
-                
-                const competencyMap = new Map<string, SuggestedCompetency>();
-                sourceCompetencies.forEach(comp => {
-                    const existing = competencyMap.get(comp.name);
-                    if (!existing || (comp.requiredProficiency || 0) > (existing.requiredProficiency || 0)) {
-                        competencyMap.set(comp.name, comp);
-                    }
-                });
-
-                targetCompetenciesWithLevels = Array.from(competencyMap.values()).map(c => ({ ...c, competencyType: c.type }));
-                targetId = cargo.id;
-                targetName = cargo.name;
-            }
-
-            const personCompetencyMap = new Map<string, number>(
-                pessoa.individualCompetencies.map(ic => [ic.competencyName, ic.proficiencyLevel])
+            // 2. Texto narrativo da IA
+            const requiredCompetencies = allCompetencies.filter(c =>
+                cargoAtual.competencyProfile?.some(r => r.competencyId === c.id)
             );
+            const gapSummary = await analyzePessoaCompetencyGap(pessoa, requiredCompetencies);
 
-            // --- Semantic Matching Logic ---
-            const competenciesMap = new Map<string, Competency>(allCompetencies.map(c => [c.name, c]));
-            const missingCompetencies = targetCompetenciesWithLevels.filter(tc => !personCompetencyMap.has(tc.name));
-            let semanticMatches = new Map<string, string | null>();
-
-            if (missingCompetencies.length > 0 && pessoa.individualCompetencies.length > 0) {
-                const requiredForAI = missingCompetencies.map(mc => ({
-                    name: mc.name,
-                    description: competenciesMap.get(mc.name)?.description || '',
-                }));
-                const availableForAI = pessoa.individualCompetencies.map(ic => ({
-                    name: ic.competencyName,
-                    description: competenciesMap.get(ic.competencyName)?.description || '',
-                }));
-                
-                semanticMatches = await batchFindCompetencyMatches(requiredForAI, availableForAI);
-            }
-            // --- End of Semantic Matching Logic ---
-
-
-            const competencyGaps: CompetencyGap[] = targetCompetenciesWithLevels.map(tc => {
-                const requiredLevel = tc.requiredProficiency || 3; // Default to 3 if missing
-                let currentLevel = personCompetencyMap.get(tc.name) || 0;
-                
-                // If direct match failed, try semantic match
-                if (currentLevel === 0 && semanticMatches.has(tc.name)) {
-                    const matchedName = semanticMatches.get(tc.name);
-                    if (matchedName) {
-                        currentLevel = personCompetencyMap.get(matchedName) || 0;
-                    }
-                }
-
-                return {
-                    competencyName: tc.name,
-                    competencyType: tc.type,
-                    requiredLevel: requiredLevel,
-                    currentLevel: currentLevel,
-                    gap: requiredLevel - currentLevel,
-                };
-            });
-
-            competencyGaps.sort((a, b) => {
-                if (b.gap !== a.gap) return b.gap - a.gap;
-                return a.competencyName.localeCompare(b.competencyName);
-            });
-
-            const targetCompetenciesForSummary = allCompetencies.filter(c => targetCompetenciesWithLevels.some(tc => tc.name === c.name));
-            const pessoaCompetenciesForSummary = allCompetencies.filter(c => personCompetencyMap.has(c.name));
-            const gapSummary = await analyzePessoaCompetencyGap(pessoa, targetCompetenciesForSummary, pessoaCompetenciesForSummary);
-            
+            // 3. Persiste no Firestore
             const newAnalysis: PessoaAnalysis = {
-                comparisonTarget: analysisTarget,
-                targetId,
-                targetName,
-                adherentCompetencies: targetCompetenciesForSummary.filter(c => personCompetencyMap.has(c.name)),
-                competenciesToDevelop: targetCompetenciesForSummary.filter(c => !personCompetencyMap.has(c.name)),
+                comparisonTarget: 'cargo',
+                targetId:         cargoAtual.id,
+                targetName:       cargoAtual.name,
+                scoreAderencia:   result.scoreAderencia,
+                adherentCompetencies:  result.adherentes,
+                competenciesToDevelop: result.aDesenvolver,
+                competenciesAbsent:    result.ausentes,
+                competencyGaps:        result.gaps,
                 gapSummary,
-                competencyGaps,
             };
-
             await onProfileUpdate({ ...pessoa, analysis: newAnalysis });
 
         } catch (err) {
@@ -647,117 +607,62 @@ const PessoaDetail: React.FC<{
                 </div>
 
                 <div className="p-10 bg-slate-50 border-t border-slate-100">
-                    <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
                         <div>
                             <h2 className="text-2xl font-black text-slate-900 tracking-tight">Análise de Aderência</h2>
-                            <p className="text-slate-500 font-medium mt-1">Comparação automática entre o perfil individual e os requisitos do cargo.</p>
+                            <p className="text-slate-500 font-medium mt-1">
+                                {cargoAtual
+                                    ? `vs. ${cargoAtual.name}${cargoAtual.dasLevel ? ` (${cargoAtual.dasLevel})` : ''}`
+                                    : 'Comparação entre perfil individual e requisitos do cargo.'}
+                            </p>
                         </div>
-                        <div className="flex items-center gap-4">
-                            <div className="relative">
-                                <select 
-                                    value={analysisTarget} 
-                                    onChange={e => setAnalysisTarget(e.target.value as any)} 
-                                    className="appearance-none pl-6 pr-12 py-3 bg-white border border-slate-200 rounded-2xl text-sm font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all shadow-sm"
-                                >
-                                    <option value="cargo">Perfil do Cargo Atual</option>
-                                </select>
-                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                                </div>
-                            </div>
-                            <button 
-                                onClick={handleAnalysis} 
-                                disabled={isAnalyzing} 
-                                className="flex items-center px-8 py-3 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 active:scale-95"
-                            >
-                                <BeakerIcon className="w-5 h-5 mr-2" />
-                                {isAnalyzing ? "Analisando..." : "Analisar com IA"}
-                            </button>
-                        </div>
+                        <button
+                            onClick={handleAnalysis}
+                            disabled={isAnalyzing || !cargoAtual}
+                            title={!cargoAtual ? 'Nenhum cargo vinculado a este servidor' : undefined}
+                            className="flex items-center px-8 py-3 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+                        >
+                            <BeakerIcon className="w-5 h-5 mr-2" />
+                            {isAnalyzing ? "Analisando..." : "Analisar com IA"}
+                        </button>
                     </div>
 
-                    {isAnalyzing && (
-                        <div className="py-20">
-                            <LoadingSpinner text="A IA está processando a aderência e identificando gaps..." />
-                        </div>
-                    )}
-                    
                     {error && (
-                        <div className="p-6 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-4 text-red-700 mb-8">
+                        <div className="p-6 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-4 text-red-700 mb-6">
                             <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-red-500 shadow-sm">
                                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                             </div>
                             <p className="font-bold">{error}</p>
                         </div>
                     )}
-                     
-                    {!isAnalyzing && pessoa.analysis ? (
-                        <div className="space-y-10">
-                            <div className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-sm">
-                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Resumo Executivo da IA</h3>
-                                <div className="relative">
-                                    <div className="absolute -left-4 top-0 bottom-0 w-1 bg-indigo-600 rounded-full"></div>
-                                    <p className="text-lg font-medium text-slate-700 leading-relaxed italic pl-4">
-                                        "{pessoa.analysis.gapSummary}"
-                                    </p>
-                                </div>
-                            </div>
-                             
-                            {pessoa.analysis.competencyGaps && pessoa.analysis.competencyGaps.length > 0 && (
-                                <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
-                                    <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-slate-100">
-                                        <thead>
-                                            <tr className="bg-slate-50/50">
-                                                <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Competência</th>
-                                                <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Tipo</th>
-                                                <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Exigido</th>
-                                                <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Atual</th>
-                                                <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Gap</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-50">
-                                            {pessoa.analysis.competencyGaps.map((item, index) => (
-                                                <tr key={index} className="hover:bg-slate-50/50 transition-colors">
-                                                    <td className="px-8 py-6">
-                                                        <div className="text-sm font-bold text-slate-900">{item.competencyName}</div>
-                                                    </td>
-                                                    <td className="px-8 py-6">
-                                                        <span className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg ${
-                                                            item.competencyType === 'Técnica' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                                                            item.competencyType === 'Gerencial' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
-                                                            'bg-amber-50 text-amber-600 border border-amber-100'
-                                                        }`}>
-                                                            {item.competencyType}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-8 py-6 text-center text-sm font-bold text-slate-400">{item.requiredLevel}</td>
-                                                    <td className="px-8 py-6 text-center text-sm font-bold text-slate-700">{item.currentLevel}</td>
-                                                    <td className="px-8 py-6 text-center">
-                                                        <span className={`px-4 py-1.5 rounded-xl text-xs font-black ${
-                                                            item.gap > 0 
-                                                                ? 'bg-red-50 text-red-600 border border-red-100' 
-                                                                : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                                                        }`}>
-                                                            {item.gap > 0 ? `-${item.gap}` : (item.gap === 0 ? 'ADQUIRIDA' : `+${Math.abs(item.gap)}`)}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    </div>
-                                </div>
-                            )}
+
+                    {/* Aviso defensivo: cargo não encontrado */}
+                    {!cargoAtual && !error && (
+                        <div className="p-5 bg-amber-50 border border-amber-200 rounded-2xl text-sm text-amber-800 mb-6 flex items-start gap-3">
+                            <span className="text-lg flex-shrink-0">⚠️</span>
+                            <span>Este servidor não está vinculado a um cargo com perfil de competências definido. Edite o cadastro para vincular um cargo e, em seguida, execute a análise de IA no módulo de Cargos.</span>
                         </div>
-                    ) : !isAnalyzing && (
+                    )}
+
+                    {/* Resultado: mostra GapAnalysisResult quando há resultado calculado */}
+                    {analysisResult && cargoAtual ? (
+                        <GapAnalysisResult
+                            pessoa={pessoa}
+                            cargo={cargoAtual}
+                            result={analysisResult}
+                            competencias={allCompetencies}
+                            aiMode="auto"
+                            aiText={pessoa.analysis?.gapSummary}
+                            isGeneratingAi={isAnalyzing}
+                        />
+                    ) : !isAnalyzing && cargoAtual && (
                         <div className="text-center py-20 bg-white rounded-[2.5rem] border border-dashed border-slate-300 shadow-sm">
                             <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
                                 <BeakerIcon className="w-10 h-10 text-slate-300" />
                             </div>
                             <p className="text-slate-900 font-bold text-xl mb-2">Sem análise realizada</p>
                             <p className="text-slate-500 font-medium max-w-sm mx-auto">
-                                Clique no botão "Analisar com IA" acima para identificar os gaps de competência deste colaborador em relação ao cargo.
+                                Clique em "Analisar com IA" para identificar os gaps de competência deste servidor em relação ao cargo.
                             </p>
                         </div>
                     )}
