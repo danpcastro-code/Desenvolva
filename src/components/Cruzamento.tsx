@@ -56,7 +56,7 @@ const Cruzamento: React.FC = () => {
       const required = competencias.filter(c =>
         cargoSel.competencyProfile?.some(r => r.competencyId === c.id)
       );
-      const text = await analyzePessoaCompetencyGap(pessoaSel, required);
+      const text = await analyzePessoaCompetencyGap(pessoaSel, required, cargoSel.name);
       setAiText(text);
     } catch (err) {
       console.error('[Cruzamento] Erro ao gerar análise textual:', err);

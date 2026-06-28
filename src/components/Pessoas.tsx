@@ -373,7 +373,7 @@ const PessoaDetail: React.FC<{
             const requiredCompetencies = allCompetencies.filter(c =>
                 cargoAtual.competencyProfile?.some(r => r.competencyId === c.id)
             );
-            const gapSummary = await analyzePessoaCompetencyGap(pessoa, requiredCompetencies);
+            const gapSummary = await analyzePessoaCompetencyGap(pessoa, requiredCompetencies, cargoAtual.name);
 
             // 3. Persiste no Firestore
             const newAnalysis: PessoaAnalysis = {
@@ -465,7 +465,7 @@ const PessoaDetail: React.FC<{
                         </div>
 
                         <h2>Resumo da Análise (vs. ${analysis.comparisonTarget === 'cargo' ? 'Cargo: ' : analysis.comparisonTarget === 'unit' ? 'Unidade: ' : ''}${analysis.targetName})</h2>
-                        <p class="summary">"${analysis.gapSummary}"</p>
+                        <p class="summary">${analysis.gapSummary.split('\n\n').filter((p: string) => p.trim()).map((p: string) => p.trim()).join('<br><br>')}</p>
 
                         <h2>Matriz de Gaps de Competências</h2>
                         <table>

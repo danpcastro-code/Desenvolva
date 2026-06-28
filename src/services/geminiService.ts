@@ -10,7 +10,7 @@ import {
 
 const WORKER_URL = 'https://desenvolva-production-ded9.up.railway.app/gemini';
 
-async function callGemini(prompt: string, generationConfig?: { maxOutputTokens?: number }): Promise<string> {
+export async function callGemini(prompt: string, generationConfig?: { maxOutputTokens?: number }): Promise<string> {
   const body: Record<string, unknown> = {
     contents: [{ parts: [{ text: prompt }] }],
   };
@@ -510,19 +510,44 @@ Responda APENAS com o texto do descritivo, em português, sem títulos, sem mark
 };
 export const analyzePessoaCompetencyGap = async (
   pessoa: Pessoa,
-  requiredCompetencies: Competency[]
+  requiredCompetencies: Competency[],
+  cargoName?: string
 ): Promise<string> => {
-  const competencyList = pessoa.individualCompetencies.length > 0
-    ? pessoa.individualCompetencies.map(ic => `${ic.competencyName}: ${ic.proficiencyLevel}/5`).join(', ')
-    : 'Nenhuma competência avaliada';
+  const pessoaMap = new Map(
+    pessoa.individualCompetencies.map(ic => [ic.competencyId, ic.proficiencyLevel])
+  );
 
-  const prompt = `
-Analise o gap de competências do servidor em relação às competências requeridas pelo cargo.
-Servidor: ${pessoa.name}
-Competências do servidor (nome: nível atual/5): ${competencyList}
-Competências requeridas pelo cargo: ${requiredCompetencies.map(c => c.name).join(', ')}
-Forneça uma análise clara do gap e sugestões de desenvolvimento.
-  `.trim();
+  const compLines = requiredCompetencies.length > 0
+    ? requiredCompetencies.map(rc => {
+        const level = pessoaMap.get(rc.id);
+        return level !== undefined
+          ? `${rc.name} (${rc.type}): servidor demonstra este nível de proficiência`
+          : `${rc.name} (${rc.type}): competência não avaliada para este servidor`;
+      }).join('\n')
+    : 'Nenhuma competência requerida definida para este cargo.';
+
+  const prompt = `Você é especialista em gestão de competências no serviço público brasileiro.
+
+Redija um parecer qualitativo sobre a aderência do servidor ${pessoa.name} às expectativas do cargo${cargoName ? ` de ${cargoName}` : ''}.
+
+FORMATO OBRIGATÓRIO — siga rigorosamente:
+- Texto corrido em português, 3 a 4 parágrafos de 3 a 5 frases cada.
+- Tom profissional e objetivo, sem subjetivismo excessivo.
+- PROIBIDO: emojis, Markdown (##, **, *, backticks, hífens como marcadores), tabelas com pipe, listas numeradas ou com marcadores, timelines, cronogramas, planos detalhados com metas trimestrais.
+- NÃO repita níveis numéricos no texto — a interface já exibe essa informação visualmente. Foque na interpretação, não nos números.
+- O cargo representa expectativas do papel institucional, não uma avaliação definitiva da pessoa.
+
+ESTRUTURA DOS PARÁGRAFOS:
+Parágrafo 1: Leitura geral do perfil — como o conjunto de competências do servidor se posiciona em relação às exigências do cargo.
+Parágrafo 2: Pontos de alinhamento — competências onde o servidor demonstra convergência com o perfil do cargo e por que isso é relevante para as responsabilidades do papel.
+Parágrafo 3: Lacunas prioritárias — quais competências apresentam maior distância e qual o impacto prático no exercício das atribuições do cargo.
+Parágrafo 4: Síntese de prontidão — frase conclusiva sobre o grau de preparação atual e o eixo de desenvolvimento mais estratégico, sem julgamento definitivo.
+
+DADOS PARA ANÁLISE:
+Servidor: ${pessoa.name}${cargoName ? `\nCargo: ${cargoName}` : ''}
+Competências requeridas pelo cargo:
+${compLines}`.trim();
+
   try {
     return await callGemini(prompt);
   } catch (error) {
