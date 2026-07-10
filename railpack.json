@@ -1,0 +1,6 @@
+{
+  "start": "node index.js",
+  "build": {
+    "steps": []
+  }
+}
