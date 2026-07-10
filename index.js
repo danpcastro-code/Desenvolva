@@ -8,9 +8,6 @@ app.use(cors());
 app.post('/gemini', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
 
-  // DIAGNÓSTICO TEMPORÁRIO — remover após investigar "Resposta vazia da IA"
-  console.log('[diag] GEMINI_API_KEY presente:', apiKey ? `${apiKey.slice(0, 6)}...` : 'AUSENTE');
-
   if (!apiKey) {
     return res.status(500).json({ error: 'API key não configurada' });
   }
@@ -26,33 +23,14 @@ app.post('/gemini', async (req, res) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-haiku-20241022',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 16000,
         messages: [{ role: 'user', content: userMessage }]
       })
     });
 
-    console.log('[diag] status da resposta da Anthropic:', response.status);
-
     const data = await response.json();
-
-    if (!response.ok) {
-      console.log('[diag] corpo do erro da Anthropic:', JSON.stringify(data));
-      return res.status(502).json({
-        error: `Anthropic API retornou erro ${response.status}`,
-        anthropicError: data,
-      });
-    }
-
     const text = data.content?.[0]?.text || '';
-
-    if (!text) {
-      console.log('[diag] Anthropic respondeu 200 mas sem texto. Corpo completo:', JSON.stringify(data));
-      return res.status(502).json({
-        error: 'A Anthropic retornou uma resposta sem texto (possível stop_reason diferente de "end_turn" ou conteúdo filtrado).',
-        anthropicResponse: data,
-      });
-    }
 
     res.json({
       candidates: [{ content: { parts: [{ text }] } }]
