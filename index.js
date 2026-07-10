@@ -8,6 +8,9 @@ app.use(cors());
 app.post('/gemini', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
 
+  // DIAGNÓSTICO TEMPORÁRIO — remover após investigar "Resposta vazia da IA"
+  console.log('[diag] GEMINI_API_KEY presente:', apiKey ? `${apiKey.slice(0, 6)}...` : 'AUSENTE');
+
   if (!apiKey) {
     return res.status(500).json({ error: 'API key não configurada' });
   }
@@ -29,7 +32,14 @@ app.post('/gemini', async (req, res) => {
       })
     });
 
+    console.log('[diag] status da resposta da Anthropic:', response.status);
+
     const data = await response.json();
+
+    if (!response.ok) {
+      console.log('[diag] corpo do erro da Anthropic:', JSON.stringify(data));
+    }
+
     const text = data.content?.[0]?.text || '';
 
     res.json({
