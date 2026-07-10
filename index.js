@@ -26,7 +26,7 @@ app.post('/gemini', async (req, res) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-3-5-haiku-20241022',
         max_tokens: 16000,
         messages: [{ role: 'user', content: userMessage }]
       })
@@ -38,9 +38,21 @@ app.post('/gemini', async (req, res) => {
 
     if (!response.ok) {
       console.log('[diag] corpo do erro da Anthropic:', JSON.stringify(data));
+      return res.status(502).json({
+        error: `Anthropic API retornou erro ${response.status}`,
+        anthropicError: data,
+      });
     }
 
     const text = data.content?.[0]?.text || '';
+
+    if (!text) {
+      console.log('[diag] Anthropic respondeu 200 mas sem texto. Corpo completo:', JSON.stringify(data));
+      return res.status(502).json({
+        error: 'A Anthropic retornou uma resposta sem texto (possível stop_reason diferente de "end_turn" ou conteúdo filtrado).',
+        anthropicResponse: data,
+      });
+    }
 
     res.json({
       candidates: [{ content: { parts: [{ text }] } }]
