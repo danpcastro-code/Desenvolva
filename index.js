@@ -18,6 +18,7 @@ app.post('/gemini', async (req, res) => {
 
   try {
     const userMessage = req.body?.contents?.[0]?.parts?.[0]?.text || '';
+    const maxTokens = req.body?.generationConfig?.maxOutputTokens || 16000;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -28,7 +29,7 @@ app.post('/gemini', async (req, res) => {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 16000,
+        max_tokens: maxTokens,
         messages: [{ role: 'user', content: userMessage }]
       })
     });
